@@ -59,48 +59,86 @@ def sentence_selection(question,story):
         
         #chunk the data , if no match eliminate question. if there is a match +2 to quant
 
-        eligible_sents.append((quant,sents[i]))
+        eligible_sents.append((quant,sents[i],i))
 
 
     eligible_sents = sorted(eligible_sents, key=operator.itemgetter(0), reverse=True)
 
     best = []
 
-    #parralell is the same list of trees in the same order
-
     best += [eligible_sents[0][1]]
 
-    answer_question(question,best)
+    best_dep = wn_extract(question,story,eligible_sents[0][2])
 
-    #wn shit here
-    
-    return best[0]
+    best = (best_dep if best_dep else 'good faith')
 
-def answer_question(question, sentence):
+    return best
 
-    wh_q = nltk.word_tokenize(question['text'])[0]
+def wn_extract(question, sentence, sent_index):
 
-    graph = question['dep']
+    qgraph = question['dep']
 
-    wh_q_node = find_node(wh_q,graph)
+    quest_type = [nltk.word_tokenize(question['text'])[0].lower()]
 
-    print
+    qnode = find_node(quest_type, qgraph)
 
-    relation = wh_q_node['rel']
+    text_sents = nltk.sent_tokenize(sentence['text'])
 
-    relation2 = graph.nodes[wh_q_node['head']]['word']
+    if qnode:
+        answer_type = [qnode['rel']]
+    else:
+        answer_type = ["nmod"]
 
-    if relation2 == None:
-        print(question['text'],' : ',wh_q_node)
+    qmain = find_main(qgraph)
 
-    #relationship and the dependant word
+    qword = qmain["word"]
+    qpos = penn2wn(qmain["tag"])
+    qword = [lmtzr.lemmatize(qword,qpos).lower()]
+
+
+    snode = find_node(qword,sentence['story_dep'][sent_index])
+    if snode:
+        sgraph = sentence['story_dep'][sent_index]
+    else:
+        for i in range(len(sentence['story_dep'])):
+            snode = find_node(qword,sentence['story_dep'][i])
+            if snode:
+                sgraph = sentence['story_dep'][i]
+                break
+
+    if snode: 
+        for node in sgraph.nodes.values():
+            if node.get('head', None) == snode["address"]:
+                if node['rel'] in answer_type:
+                    deps = get_dependents(node, sgraph)
+                    deps = sorted(deps+[node], key=operator.itemgetter("address"))
+                    return " ".join(dep["word"] for dep in deps)
+
+    return None
 
 
 def find_node(word, graph):
+    ## replace with is similar
     for node in graph.nodes.values():
-        if node["word"] == word:
+        if node["lemma"] in word:
             return node
     return None
+
+def find_main(graph):
+    for node in graph.nodes.values():
+        if node['rel'] == 'root':
+            return node
+    return None
+
+def get_dependents(node, graph):
+    results = []
+    for item in node["deps"]:
+        address = node["deps"][item][0]
+        dep = graph.nodes[address]
+        results.append(dep)
+        results = results + get_dependents(dep, graph)
+        
+    return results
 
 def penn2wn(treebank_tag):
 
