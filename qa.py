@@ -2,18 +2,37 @@
 from qa_engine.base import QABase
 from qa_engine.score_answers import main as score_answers
 from nltk.corpus import wordnet as wn
+from collections import defaultdict
 from nltk.tree import Tree
 from nltk.stem.wordnet import WordNetLemmatizer
 import operator
 import nltk
 import re
+import csv
 
+################ COLLAPSE ME I AM SETUP SCRIPT ###################
+
+def load_wordnet_ids(filename):
+    file = open(filename, 'r')
+    if "noun" in filename: type = "noun"
+    else: type = "verb"
+    csvreader = csv.DictReader(file, delimiter=",", quotechar='"')
+    word_ids = defaultdict()
+    for line in csvreader:
+        word_ids[line['synset_id']] = {'synset_offset': line['synset_offset'], \
+                                        'story_'+type: line['story_'+type], \
+                                        'stories': line['stories']}
+    return word_ids
 
 ####################### Global VARIABLES #########################
 
 stop_words = nltk.corpus.stopwords.words("english") 
 
 lmtzr = WordNetLemmatizer()
+
+noun_ids = load_wordnet_ids("Wordnet_nouns.csv")
+
+verb_ids = load_wordnet_ids("Wordnet_verbs.csv")
 
 ######################## HELPER FUNCTIONS ########################
 
@@ -22,6 +41,10 @@ def sentence_selection(question,story):
     eligible_sents = []
 
     sents = get_sents(story['text'])
+
+    dep_sents = story['story_dep']
+
+    dep_quest = question['dep']
 
     keywords , pattern = get_keywords_pattern_tuple(question['text'],question['par'])
 
@@ -47,30 +70,37 @@ def sentence_selection(question,story):
 
     best += [eligible_sents[0][1]]
 
+    answer_question(question,best)
+
+    #wn shit here
     
-    ch_best = []
+    return best[0]
 
-    for i in range(len(best)):
-        sentence = nltk.word_tokenize(best[i])
-    
-        const_parse = story['story_dep'][i]
+def answer_question(question, sentence):
 
-        pos_sent = nltk.pos_tag(sentence)
-        tree = chunker.parse(pos_sent)
-        locations = pattern['chunk_func'](tree)
-        for loc in locations:
-            ch_best.extend( [" ".join([token[0] for token in loc.leaves()])] )
+    wh_q = nltk.word_tokenize(question['text'])[0]
+
+    graph = question['dep']
+
+    wh_q_node = find_node(wh_q,graph)
+
+    print
+
+    relation = wh_q_node['rel']
+
+    relation2 = graph.nodes[wh_q_node['head']]['word']
+
+    if relation2 == None:
+        print(question['text'],' : ',wh_q_node)
+
+    #relationship and the dependant word
 
 
-   # choose best by calculating the distance from the question keywords in the sentence
-
-    if len(ch_best) != 0:
-        best = ' '.join(ch_best)
-    else:
-        best = best[0]
-    
-    return best
-
+def find_node(word, graph):
+    for node in graph.nodes.values():
+        if node["word"] == word:
+            return node
+    return None
 
 def penn2wn(treebank_tag):
 
