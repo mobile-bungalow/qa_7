@@ -48,8 +48,6 @@ def sentence_selection(question,story):
 
     keywords , pattern = get_keywords_pattern_tuple(question['text'],question['par'])
 
-    #pattern (answer pos, answer chunk type)
-
     for i in range(len(sents)):
         words = nltk.word_tokenize(sents[i])
         words_pos = nltk.pos_tag(words)
@@ -70,7 +68,7 @@ def sentence_selection(question,story):
 
     best_dep = wn_extract(question,story,eligible_sents[0][2])
 
-    best = (best_dep if best_dep else 'good faith')
+    best = (best_dep if best_dep else best[0])
 
     return best
 
@@ -82,47 +80,107 @@ def wn_extract(question, sentence, sent_index):
 
     qnode = find_node(quest_type, qgraph)
 
-    text_sents = nltk.sent_tokenize(sentence['text'])
+    #generalized way to extract plausible answer types from  the graph
+    #currently probably a problem
 
     if qnode:
-        answer_type = [qnode['rel']]
+        answer_type = [qnode['rel']] + [i for i in qnode['deps']]
+        if 'dep' in answer_type:
+            answer_type += ['dobj','iobj']
     else:
-        answer_type = ["nmod"]
+        answer_type = ["nsubj"]
 
     qmain = find_main(qgraph)
 
     qword = qmain["word"]
     qpos = penn2wn(qmain["tag"])
-    qword = [lmtzr.lemmatize(qword,qpos).lower()]
+    #qword = [lmtzr.lemmatize(qword,qpos).lower()]
 
+    filename = question['sid'] + '.vgl'
+    snode = find_similar(qword,qmain['tag'],sentence['story_dep'][sent_index],filename)
+    
+    sent_list = nltk.sent_tokenize(sentence['text'])
 
-    snode = find_node(qword,sentence['story_dep'][sent_index])
     if snode:
         sgraph = sentence['story_dep'][sent_index]
     else:
+        #print('Stage 1 FALLBBACK , question' , question['text'] , 'For word :' , qword , ' missed in ', sent_list[sent_index]) 
         for i in range(len(sentence['story_dep'])):
-            snode = find_node(qword,sentence['story_dep'][i])
+            snode = find_similar(qword,qmain['tag'], sentence['story_dep'][i],filename)
             if snode:
                 sgraph = sentence['story_dep'][i]
                 break
 
     if snode: 
+        #print(question['text'],' : ')
         for node in sgraph.nodes.values():
             if node.get('head', None) == snode["address"]:
+                #print('word :', node['word'],' pointed to by snode : ' , snode['word'])
+                #print(node['rel'] , answer_type ," : ", node['rel'] in answer_type)
                 if node['rel'] in answer_type:
                     deps = get_dependents(node, sgraph)
                     deps = sorted(deps+[node], key=operator.itemgetter("address"))
-                    return " ".join(dep["word"] for dep in deps)
+                    #print( 'ANSWER : ', question['text']," : ", " ".join(dep["word"] for dep in deps))
+                    return " ".join(dep["word"] for dep in deps)       
 
     return None
 
 
 def find_node(word, graph):
-    ## replace with is similar
+    ## replace with is , similar or equal.
     for node in graph.nodes.values():
         if node["lemma"] in word:
             return node
     return None
+
+def find_similar(word, word_pos, graph, filename):
+    if word.lower() in ['why','when','what','who','where','did','which','how']:
+        #apply some heuristic
+        #until that work is done return none
+        return find_main(graph)
+
+    wn_word = None
+
+    if word_pos.startswith('V'):
+        for key in wn.synsets(word):
+            if key.name() in verb_ids:
+                print(key)
+                wn_word = wn.synset(key.name())
+                break
+
+   
+    if word_pos.startswith('N'):
+        for key in wn.synsets(word):
+            if key.name() in noun_ids:
+                print(key)
+                wn_word = wn.synset(key.name())
+                break
+    
+    if len(wn.synsets(word)) == 1:
+        wn_word = wn.synsets(word)[0]
+    
+    if wn_word:
+        wn_to_check = None       
+        for node in graph.nodes.values():
+            if node['word']:
+                if node['word'] in wn_word.lemma_names():
+                    return node
+                #print(' SYNSETS FOR WORD : ', node['word'], 'as compared to:', wn_word)
+                sets = wn.synsets(node['word'])
+                for item in sets:
+                    path_sim = wn.path_similarity(item,wn_word)
+                    if path_sim and path_sim > 0.6:
+                        return node
+                node_lemma = lmtzr.lemmatize(node['word'],penn2wn(node['tag'])).lower()
+                word_lemma = lmtzr.lemmatize(word,penn2wn(word_pos)).lower()
+                if node_lemma == word_lemma or word == node_lemma:
+                    return node 
+
+    else:
+
+        ##just find the fucking node anyways. if its not a noun or a verb
+        ## then they must be being pretty exact with their language
+        return find_node([word],graph)
 
 def find_main(graph):
     for node in graph.nodes.values():
@@ -305,7 +363,7 @@ def Did(question, question_sch):
     def Did_chunk(text):
         locations = []
         for subtree in text.subtrees():
-            if subtree.label() == 'PP':
+            if subtree.label() in ['PP','VP']:
                 if subtree[0][0] in ppl_filter:
                     locations.append(subtree)
         return locations
@@ -323,7 +381,6 @@ def Had(question, question_sch):
         return locations
 
     return  {'subject_pos':['NN'] , 'tree':nltk.ParentedTree.fromstring("(VP (*) (PP))")  ,'chunk_func':Had_chunk}
-
 
 def Which(question, question_sch):
 
@@ -358,6 +415,15 @@ def get_keywords_pattern_tuple(question,question_sch):
     keywords = list(filter(lambda x: x not in (stop_words + ['’',',','.','!',"'",'"','?']), q_words))
     keywords = nltk.pos_tag(keywords)
     keywords = list(map(lambda x: lmtzr.lemmatize( x[0], pos = penn2wn(x[1]) )  , keywords))
+
+    q_wh = nltk.word_tokenize(question)[0]
+
+    if(q_wh.lower() == 'where'):
+        keywords += ppl_filter
+    elif(q_wh.lower() == 'when'):
+        keywords += pp_filter
+    elif(q_wh.lower() == 'why'):
+        keywords += why_filter
 
     return keywords , pattern
 
